@@ -1,22 +1,30 @@
-# install-toobaagent.ps1 — نصب Tooba agent Desktop روی ویندوز
-# هم‌سبک با اسکریپت رسمی هرمس:  iex (irm https://raw.githubusercontent.com/<OWNER>/<REPO>/main/install-toobaagent.ps1)
+# install-toobaagent.ps1 - install Tooba agent Desktop on Windows
+# Usage (same style as the official Hermes installer):
+#   iex (irm https://raw.githubusercontent.com/mesohrabi-hash/tooba-agent-desktop-dist/main/install-toobaagent.ps1)
 #
-# چه می‌کند:
-#   1) آخرین Release را از گیت‌هاب می‌خواند (یا تگ مشخص با -Tag)
-#   2) فایل نصب NSIS را دانلود می‌کند
-#   3) SHA256 را (اگر در Release موجود باشد) تطبیق می‌دهد
-#   4) هر نسخهٔ در حال اجرای برنامه را می‌بندد (وگرنه فایل exe قفل می‌ماند و نصب بی‌اثر می‌شود)
-#   5) نصب خاموش اجرا می‌کند (/S)
-#   6) نسخهٔ نصب‌شده روی دیسک را نشان می‌دهد و اگر چند نصب پیدا شد هشدار می‌دهد
+# NOTE: every message in this file is ENGLISH on purpose. Persian text in a
+# PowerShell/cmd console renders reversed and broken on Windows (legacy code
+# page), so the installer must never print non-ASCII characters.
 #
-# حذف: Control Panel → Programs and Features → "Tooba agent Desktop" → Uninstall
-#       (یا: Get-Package '*Tooba*' | Uninstall-Package)
+# What it does:
+#   1) reads the newest GitHub Release (or a specific tag with -Tag)
+#   2) downloads the NSIS installer asset
+#   3) verifies SHA256 against SHA256SUMS.txt when the release provides one
+#   4) closes any running copy of the app (otherwise the .exe stays locked and
+#      the install silently has no effect)
+#   5) runs the installer silently (/S)
+#   6) lists every installation found on disk, and warns when there is more
+#      than one (a stale shortcut is the usual reason a user keeps seeing an
+#      old version number)
+#
+# Uninstall: Control Panel -> Programs and Features -> "Tooba agent Desktop" -> Uninstall
+#            (or:  Get-Package '*Tooba*' | Uninstall-Package)
 
 [CmdletBinding()]
 param(
   [string]$Owner = 'mesohrabi-hash',
   [string]$Repo  = 'tooba-agent-desktop-dist',
-  [string]$Tag   = '',                       # خالی = آخرین Release
+  [string]$Tag   = '',                       # empty = newest release
   [string]$AssetPattern = 'ToobaAgentDesktop-*-win-x64.exe',
   [switch]$SkipHashCheck,
   [switch]$Quiet
@@ -42,33 +50,33 @@ if ($env:GITHUB_TOKEN) { $headers['Authorization'] = "Bearer $($env:GITHUB_TOKEN
 
 try {
   if ($Tag) {
-    Info "خواندن Release با تگ $Tag"
+    Info "Reading release with tag $Tag"
     $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Owner/$Repo/releases/tags/$Tag" -Headers $headers -TimeoutSec 60
   } else {
-    Info 'خواندن فهرست Releaseها (جدیدترین نسخه، شامل پیش‌انتشارها)'
+    Info 'Reading release list (newest first, pre-releases included)'
     $all = Invoke-RestMethod -Uri "https://api.github.com/repos/$Owner/$Repo/releases?per_page=30" -Headers $headers -TimeoutSec 60
     $release = $all | Where-Object { $_.assets.name -like $AssetPattern } | Select-Object -First 1
-    if (-not $release) { Fail "هیچ Release دارای فایل نصب با الگوی '$AssetPattern' پیدا نشد." }
+    if (-not $release) { Fail "No release found with an installer asset matching '$AssetPattern'." }
   }
 } catch {
-  Fail "دریافت Release ناموفق بود: $($_.Exception.Message)"
+  Fail "Could not fetch the release: $($_.Exception.Message)"
 }
 
 $asset = $release.assets | Where-Object { $_.name -like $AssetPattern } | Select-Object -First 1
-if (-not $asset) { Fail "دارایی نصب با الگوی '$AssetPattern' در Release '$($release.tag_name)' پیدا نشد." }
+if (-not $asset) { Fail "Release '$($release.tag_name)' has no installer asset matching '$AssetPattern'." }
 
 $tmp  = Join-Path $env:TEMP $asset.name
 $sums = $release.assets | Where-Object { $_.name -eq 'SHA256SUMS.txt' } | Select-Object -First 1
 
-Info "نسخهٔ هدف: $($release.tag_name)"
+Info "Target version: $($release.tag_name)"
 
 $before = Get-ToobaInstallations
 if ($before.Count -gt 0) {
-  Info 'نسخه‌های نصب‌شدهٔ فعلی روی این کامپیوتر:'
+  Info 'Currently installed copies on this machine:'
   foreach ($b in $before) { Write-Host ("    {0}  version={1}" -f $b.FullName, $b.VersionInfo.FileVersion) -ForegroundColor DarkGray }
 }
 
-Info "دانلود $($asset.name)  ($([math]::Round($asset.size/1MB,1)) MB)"
+Info "Downloading $($asset.name)  ($([math]::Round($asset.size/1MB,1)) MB)"
 Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $tmp -TimeoutSec 900
 
 if (-not $SkipHashCheck -and $sums) {
@@ -78,50 +86,51 @@ if (-not $SkipHashCheck -and $sums) {
   $actual = (Get-FileHash $tmp -Algorithm SHA256).Hash
   if ($expected -and ($expected.ToUpper() -ne $actual.ToUpper())) {
     Remove-Item $tmp -Force
-    Fail "SHA256 مطابقت ندارد! انتظار=$expected  واقعی=$actual"
+    Fail "SHA256 mismatch. expected=$expected actual=$actual"
   }
-  Info "SHA256 تأیید شد: $actual"
+  Info "SHA256 verified: $actual"
 } elseif (-not $SkipHashCheck) {
-  Info 'هشدار: SHA256SUMS.txt در Release نبود — بررسی یکپارچگی انجام نشد.'
+  Info 'Warning: no SHA256SUMS.txt in this release - integrity was not checked.'
 }
 
-# --- بستن برنامهٔ در حال اجرا (بدون این مرحله نصب روی نسخهٔ قبلی بی‌اثر می‌ماند) ---
+# --- Close the running app. Without this step the install has no effect on an
+#     already-running copy: the .exe is locked and the files are not replaced. ---
 $running = Get-Process -Name 'ToobaAgent' -ErrorAction SilentlyContinue
 if ($running) {
-  Info "بستن $($running.Count) نسخهٔ در حال اجرا…"
+  Info "Closing $($running.Count) running copy/copies..."
   $running | Stop-Process -Force -ErrorAction SilentlyContinue
   Start-Sleep -Seconds 3
   $still = Get-Process -Name 'ToobaAgent' -ErrorAction SilentlyContinue
-  if ($still) { Fail 'برنامه بسته نشد. آن را دستی ببندید (آیکون سینی → Exit) و دوباره اجرا کنید.' }
+  if ($still) { Fail 'The app is still running. Close it by hand (tray icon -> Exit) and run this again.' }
 } else {
-  Info 'هیچ نسخهٔ در حال اجرایی نبود.'
+  Info 'No running copy was found.'
 }
 
-Info 'اجرای نصب خاموش…'
+Info 'Running the silent install...'
 $proc = Start-Process -FilePath $tmp -ArgumentList '/S' -PassThru -Wait
-if ($proc.ExitCode -ne 0) { Fail "نصب با کد $($proc.ExitCode) ناموفق بود." }
+if ($proc.ExitCode -ne 0) { Fail "Installer exited with code $($proc.ExitCode)." }
 
-Info 'نصب شد.'
+Info 'Installed.'
 try { Remove-Item $tmp -Force -ErrorAction SilentlyContinue } catch { }
 try { if ($sumFile) { Remove-Item $sumFile -Force -ErrorAction SilentlyContinue } } catch { }
 
-# --- تأیید نسخهٔ نصب‌شده ---
+# --- Report what is now on disk ---
 Start-Sleep -Seconds 2
 $after = Get-ToobaInstallations
 Write-Host ''
-Write-Host 'نسخه‌های نصب‌شده روی این کامپیوتر:' -ForegroundColor Yellow
+Write-Host 'Installed copies on this machine:' -ForegroundColor Yellow
 if ($after.Count -eq 0) {
-  Write-Host '  (پیدا نشد — مسیر نصب را دستی بررسی کنید)' -ForegroundColor Red
+  Write-Host '  (none found - check the install path by hand)' -ForegroundColor Red
 } else {
   foreach ($a in $after) { Write-Host ("  {0}   version={1}" -f $a.FullName, $a.VersionInfo.FileVersion) }
   if ($after.Count -gt 1) {
-    Write-Host '  توجه: بیش از یک نصب وجود دارد. میان‌بری که باز می‌کنید باید به جدیدترین مسیر بالا اشاره کند.' -ForegroundColor Yellow
+    Write-Host '  NOTE: more than one copy is installed. The shortcut you click must point at the newest path listed above.' -ForegroundColor Yellow
   }
 }
 Write-Host ''
-Write-Host 'برنامه را باز کنید و نسخهٔ نوار بالای پنجره را ببینید؛ باید با نسخهٔ هدف بالا یکی باشد.' -ForegroundColor Yellow
+Write-Host 'Open the app and read the version in the top bar of the window; it must match the target version above.' -ForegroundColor Yellow
 Write-Host ''
-Write-Host 'حذف برنامه:' -ForegroundColor Yellow
-Write-Host '  Control Panel → Programs and Features → "Tooba agent Desktop" → Uninstall'
-Write-Host '  یا در PowerShell:  Get-Package "*Tooba*" | Uninstall-Package'
+Write-Host 'Uninstall:' -ForegroundColor Yellow
+Write-Host '  Control Panel -> Programs and Features -> "Tooba agent Desktop" -> Uninstall'
+Write-Host '  or in PowerShell:  Get-Package "*Tooba*" | Uninstall-Package'
 Write-Host ''
